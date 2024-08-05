@@ -6,13 +6,13 @@ use crate::{
         Attest, AttestBuffer, CreationTicket, Data, Digest, PcrSelectionList, Signature,
         SignatureScheme,
     },
-    tss2_esys::{Esys_Certify, Esys_Quote},
+    tss2_esys::{Esys_Certify, Esys_GetTime, Esys_Quote},
     Context, Result, ReturnCode,
 };
 use log::error;
 use std::convert::TryFrom;
 use std::ptr::null_mut;
-use tss_esapi_sys::Esys_CertifyCreation;
+use tss_esapi_sys::{Esys_CertifyCreation, ESYS_TR_RH_ENDORSEMENT};
 
 impl Context {
     /// Prove that an object is loaded in the TPM
@@ -322,8 +322,47 @@ impl Context {
         ))
     }
 
+    /// Get the current time and clock from the TPM
+    ///
+    /// # Errors
+    /// * if the qualifying data provided is too long, a `WrongParamSize` wrapper error will be returned
+    pub fn get_time(
+        &mut self,
+        signing_key_handle: KeyHandle,
+        qualifying_data: Data,
+        signing_scheme: SignatureScheme,
+    ) -> Result<(Attest, Signature)> {
+        let mut timeinfo_ptr = null_mut();
+        let mut signature_ptr = null_mut();
+        ReturnCode::ensure_success(
+            unsafe {
+                Esys_GetTime(
+                    self.mut_context(),
+                    ESYS_TR_RH_ENDORSEMENT,
+                    signing_key_handle.into(),
+                    self.optional_session_1(),
+                    self.optional_session_2(),
+                    self.optional_session_3(),
+                    &qualifying_data.into(),
+                    &signing_scheme.into(),
+                    &mut timeinfo_ptr,
+                    &mut signature_ptr,
+                )
+            },
+            |ret| {
+                error!("Error in GetTime: {:#010X}", ret);
+            },
+        )?;
+
+        let timeinfo = Context::ffi_data_to_owned(timeinfo_ptr);
+        let signature = Context::ffi_data_to_owned(signature_ptr);
+        Ok((
+            Attest::try_from(AttestBuffer::try_from(timeinfo)?)?,
+            Signature::try_from(signature)?,
+        ))
+    }
+
     // Missing function: GetSessionAuditDigest
     // Missing function: GestCommandAuditDigest
-    // Missing function: GetTime
     // Missing function: CertifyX509
 }
